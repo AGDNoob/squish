@@ -1,0 +1,30 @@
+# Build
+build/
+build_linux/
+cmake-build-*/
+out/
+optimized/
+
+# Installer output
+*.exe
+!squish-*-setup.exe
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+CMakeSettings.json
+
+# Compiled
+*.dll
+*.so
+*.dylib
+*.obj
+*.o
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
