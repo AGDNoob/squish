@@ -5,9 +5,9 @@ cmake-build-*/
 out/
 optimized/
 
-# Installer output
+# Installer
 *.exe
-!squish-*-setup.exe
+installer.nsi
 
 # IDE
 .vs/
