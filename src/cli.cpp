@@ -42,8 +42,9 @@ OPTIONS
   -o, --output <dir>     Output directory (default: ./optimized/)
   -q, --quality <1-100>  JPEG quality (default: 80)
   -w, --width <pixels>   Max width, preserves aspect ratio (default: no resize)
+  -h, --height <pixels>  Max height, preserves aspect ratio (default: no resize)
   -v, --verbose          Show progress for each file
-  -h, --help             Show this help message
+  -H, --help             Show this help message
   --version              Show version number
 
 SUPPORTED FORMATS
@@ -64,7 +65,7 @@ std::optional<CLIConfig> CLI::parse(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         
-        if (arg == "--help" || arg == "-h") {
+        if (arg == "--help" || arg == "-H") {
             print_help();
             std::exit(0);
         }
@@ -100,6 +101,18 @@ std::optional<CLIConfig> CLI::parse(int argc, char* argv[]) {
                 config.max_width = std::stoi(argv[i]);
             } catch (...) {
                 std::cerr << "Error: Invalid width value\n";
+                return std::nullopt;
+            }
+        }
+        else if (arg == "-h" || arg == "--height") {
+            if (++i >= argc) {
+                std::cerr << "Error: " << arg << " requires a height in pixels\n";
+                return std::nullopt;
+            }
+            try {
+                config.max_height = std::stoi(argv[i]);
+            } catch (...) {
+                std::cerr << "Error: Invalid height value\n";
                 return std::nullopt;
             }
         }
@@ -214,6 +227,7 @@ int CLI::run(const CLIConfig& config) {
     options.quality = config.quality;
     options.format = OutputFormat::AUTO;
     options.max_width = config.max_width;
+    options.max_height = config.max_height;
     
     // threads rausfinden, 4 als fallback
     size_t num_threads = std::thread::hardware_concurrency();

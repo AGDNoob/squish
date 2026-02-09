@@ -13,6 +13,7 @@ struct CLIConfig {
     std::filesystem::path output_dir;  // leer = "optimized" subfolder
     int quality = 80;                  // guter default
     int max_width = 0;                 // 0 = kein resize
+    int max_height = 0;                // 0 = kein resize
     bool verbose = false;
 };
 

@@ -48,7 +48,7 @@ squish photos/                  # entire directory
 squish photos/ -o out/          # custom output dir
 squish photos/ -q 60            # jpeg quality 1-100 (default: 80)
 squish photos/ -w 1920          # max width, keeps aspect ratio
-squish photos/ -h 1080          # max height
+squish photos/ -h 1080          # max height, keeps aspect ratio
 squish photos/ -w 1920 -h 1080  # fit into box
 squish -v photos/               # verbose output
 ```
