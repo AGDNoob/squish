@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # squish installer for Linux
 # curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
 
@@ -31,7 +31,7 @@ echo ""
 if [ "$EUID" -ne 0 ]; then
     if command -v sudo &> /dev/null; then
         SUDO="sudo"
-        echo -e "${YELLOW}Benötige sudo für Installation nach $INSTALL_DIR${NC}"
+        echo -e "${YELLOW}BenÃ¶tige sudo fÃ¼r Installation nach $INSTALL_DIR${NC}"
     else
         echo -e "${RED}Error: Brauche root-Rechte oder sudo${NC}"
         exit 1
@@ -122,7 +122,7 @@ cd /
 rm -rf "$TEMP_DIR"
 
 echo ""
-echo -e "${GREEN}✓ squish $VERSION erfolgreich installiert!${NC}"
+echo -e "${GREEN}âœ“ squish $VERSION erfolgreich installiert!${NC}"
 echo ""
 echo "Usage: squish photos/ -o compressed/"
 echo ""
@@ -132,5 +132,5 @@ if command -v squish &> /dev/null; then
     squish --version
 else
     echo -e "${YELLOW}Hinweis: $INSTALL_DIR ist nicht in PATH${NC}"
-    echo "Füge hinzu mit: export PATH=\"\$PATH:$INSTALL_DIR\""
+    echo "FÃ¼ge hinzu mit: export PATH=\"\$PATH:$INSTALL_DIR\""
 fi
