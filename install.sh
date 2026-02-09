@@ -31,9 +31,9 @@ echo ""
 if [ "$EUID" -ne 0 ]; then
     if command -v sudo &> /dev/null; then
         SUDO="sudo"
-        echo -e "${YELLOW}BenÃ¶tige sudo fÃ¼r Installation nach $INSTALL_DIR${NC}"
+        echo -e "${YELLOW}Need sudo for installation to $INSTALL_DIR${NC}"
     else
-        echo -e "${RED}Error: Brauche root-Rechte oder sudo${NC}"
+        echo -e "${RED}Error: Need root privileges or sudo${NC}"
         exit 1
     fi
 else
@@ -50,11 +50,11 @@ for cmd in cmake g++ make; do
 done
 
 if [ -n "$MISSING" ]; then
-    echo -e "${YELLOW}Fehlende Dependencies:$MISSING${NC}"
+    echo -e "${YELLOW}Missing dependencies:$MISSING${NC}"
     echo ""
     if command -v apt-get &> /dev/null; then
-        echo "Installiere mit: sudo apt-get install build-essential cmake"
-        read -p "Jetzt installieren? [Y/n] " -n 1 -r
+        echo "Install with: sudo apt-get install build-essential cmake"
+        read -p "Install now? [Y/n] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
             $SUDO apt-get update
@@ -63,8 +63,8 @@ if [ -n "$MISSING" ]; then
             exit 1
         fi
     elif command -v dnf &> /dev/null; then
-        echo "Installiere mit: sudo dnf install gcc-c++ cmake make"
-        read -p "Jetzt installieren? [Y/n] " -n 1 -r
+        echo "Install with: sudo dnf install gcc-c++ cmake make"
+        read -p "Install now? [Y/n] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
             $SUDO dnf install -y gcc-c++ cmake make
@@ -72,8 +72,8 @@ if [ -n "$MISSING" ]; then
             exit 1
         fi
     elif command -v pacman &> /dev/null; then
-        echo "Installiere mit: sudo pacman -S base-devel cmake"
-        read -p "Jetzt installieren? [Y/n] " -n 1 -r
+        echo "Install with: sudo pacman -S base-devel cmake"
+        read -p "Install now? [Y/n] " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
             $SUDO pacman -S --noconfirm base-devel cmake
@@ -81,7 +81,7 @@ if [ -n "$MISSING" ]; then
             exit 1
         fi
     else
-        echo -e "${RED}Bitte manuell installieren:$MISSING${NC}"
+        echo -e "${RED}Please install manually:$MISSING${NC}"
         exit 1
     fi
 fi
@@ -93,7 +93,7 @@ cd "$TEMP_DIR"
 # Option 1: Clone from git (if available)
 if command -v git &> /dev/null && [ -n "$REPO_URL" ]; then
     git clone --depth 1 "$REPO_URL" squish 2>/dev/null || {
-        echo -e "${YELLOW}Git clone fehlgeschlagen, versuche lokalen Build...${NC}"
+        echo -e "${YELLOW}Git clone failed, trying local build...${NC}"
     }
 fi
 
@@ -103,7 +103,7 @@ if [ ! -d "squish" ]; then
     if [ -f "$SCRIPT_DIR/CMakeLists.txt" ]; then
         cp -r "$SCRIPT_DIR" squish
     else
-        echo -e "${RED}Error: Kein Source gefunden${NC}"
+        echo -e "${RED}Error: No source found${NC}"
         exit 1
     fi
 fi
@@ -122,7 +122,7 @@ cd /
 rm -rf "$TEMP_DIR"
 
 echo ""
-echo -e "${GREEN}âœ“ squish $VERSION erfolgreich installiert!${NC}"
+echo -e "${GREEN}Done! squish $VERSION installed successfully${NC}"
 echo ""
 echo "Usage: squish photos/ -o compressed/"
 echo ""
@@ -131,6 +131,6 @@ echo ""
 if command -v squish &> /dev/null; then
     squish --version
 else
-    echo -e "${YELLOW}Hinweis: $INSTALL_DIR ist nicht in PATH${NC}"
-    echo "FÃ¼ge hinzu mit: export PATH=\"\$PATH:$INSTALL_DIR\""
+    echo -e "${YELLOW}Note: $INSTALL_DIR is not in PATH${NC}"
+    echo "Add with: export PATH=\"\$PATH:$INSTALL_DIR\""
 fi
