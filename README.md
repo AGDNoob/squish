@@ -167,8 +167,13 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ```
 
-Run tests: there aren't any. The code either works or it doesn't.
-I tested it on 50,000+ images, that's the test suite.
+Run tests:
+
+```bash
+./test.sh
+```
+
+Smoke test for basic functionality. Real test suite: 50,000+ images, works or it doesn't.
 
 ## License
 
