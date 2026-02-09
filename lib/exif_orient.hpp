@@ -137,91 +137,6 @@ inline int read_jpeg_orientation(const char* filename) {
     fclose(fp);
     
     return read_jpeg_orientation_mem(buf, len);
-    
-    // JPEG SOI marker checken
-    if (buf[0] != 0xFF || buf[1] != 0xD8) return 1;
-    
-    // APP1 (EXIF) marker finden
-    size_t pos = 2;
-    while (pos + 4 < len) {
-        if (buf[pos] != 0xFF) {
-            pos++;
-            continue;
-        }
-        
-        uint8_t marker = buf[pos + 1];
-        
-        // padding skippen
-        if (marker == 0xFF) {
-            pos++;
-            continue;
-        }
-        
-        // SOS oder image data - stop
-        if (marker == 0xDA || marker == 0xD9) break;
-        
-        // standalone markers
-        if (marker == 0xD0 || marker == 0x01) {
-            pos += 2;
-            continue;
-        }
-        
-        // segment länge
-        uint16_t seg_len = (buf[pos + 2] << 8) | buf[pos + 3];
-        
-        // APP1 mit EXIF
-        if (marker == 0xE1 && pos + 10 < len) {
-            // exif check
-            if (memcmp(buf + pos + 4, "Exif\0\0", 6) == 0) {
-                // TIFF header
-                size_t tiff_start = pos + 10;
-                if (tiff_start + 8 > len) return 1;
-                
-                // byte order
-                bool big_endian = (buf[tiff_start] == 'M');
-                
-                auto read16 = [&](size_t offset) -> uint16_t {
-                    if (tiff_start + offset + 2 > len) return 0;
-                    const uint8_t* p = buf + tiff_start + offset;
-                    return big_endian ? (p[0] << 8) | p[1] : p[0] | (p[1] << 8);
-                };
-                
-                auto read32 = [&](size_t offset) -> uint32_t {
-                    if (tiff_start + offset + 4 > len) return 0;
-                    const uint8_t* p = buf + tiff_start + offset;
-                    return big_endian ? 
-                        (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3] :
-                        p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
-                };
-                
-                // IFD0 position
-                uint32_t ifd_offset = read32(4);
-                if (ifd_offset == 0 || tiff_start + ifd_offset + 2 > len) return 1;
-                
-                // einträge im IFD0
-                uint16_t entry_count = read16(ifd_offset);
-                
-                // orientation tag suchen (0x0112)
-                for (int i = 0; i < entry_count; i++) {
-                    size_t entry_offset = ifd_offset + 2 + i * 12;
-                    if (tiff_start + entry_offset + 12 > len) break;
-                    
-                    uint16_t tag = read16(entry_offset);
-                    if (tag == 0x0112) {  // Orientation tag
-                        uint16_t orientation = read16(entry_offset + 8);
-                        if (orientation >= 1 && orientation <= 8) {
-                            return orientation;
-                        }
-                        return 1;
-                    }
-                }
-            }
-        }
-        
-        pos += 2 + seg_len;
-    }
-    
-    return 1;  // No orientation found
 }
 
 // Apply orientation transform to pixel data
@@ -322,7 +237,7 @@ inline bool apply_orientation(
             int new_width = height;
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
-                    int nx = y;
+                    int nx = height - 1 - y;
                     int ny = width - 1 - x;
                     set_pixel(temp.data() + ny * new_width * pixel_size + nx * pixel_size,
                               get_pixel(x, y));

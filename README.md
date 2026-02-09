@@ -129,14 +129,13 @@ lib/
   stb_image_resize2.h   - resize with filters
   fpng.cpp/hpp          - fast PNG encoder (Rich Geldreich, MIT)
   fast_jpeg.hpp         - custom JPEG encoder
-  fast_jpeg_decode.hpp  - custom JPEG decoder (for reading)
   dct_avx2.asm          - handwritten AVX2 DCT kernel (x86-64 asm)
   exif_orient.hpp       - EXIF orientation parser
   mmap_file.hpp         - memory-mapped file I/O
   gpu_dct.hpp           - DirectCompute DCT (Windows only)
 ```
 
-Everything in `lib/` except fast_jpeg*.hpp, dct_avx2.asm, exif_orient.hpp,
+Everything in `lib/` except fast_jpeg.hpp, dct_avx2.asm, exif_orient.hpp,
 mmap_file.hpp, and gpu_dct.hpp is third-party. All included, no external dependencies.
 
 ## Limitations

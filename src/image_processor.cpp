@@ -22,9 +22,6 @@
 // eigener jpeg encoder weil stb zu langsam war wtf
 #include "fast_jpeg.hpp"
 
-// decoder hab ich am ende nich gebraucht aber lassen wir mal drin
-#include "fast_jpeg_decode.hpp"
-
 // exif kram damit handyfotos nich auf der seite liegen
 #include "exif_orient.hpp"
 
