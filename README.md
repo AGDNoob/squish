@@ -43,14 +43,15 @@ Same as Linux but use MinGW or MSVC. Tested with GCC 15 via MSYS2.
 ## Usage
 
 ```bash
-squish photo.jpg                # -> ./optimized/photo.jpg
-squish photos/                  # entire directory
-squish photos/ -o out/          # custom output dir
-squish photos/ -q 60            # jpeg quality 1-100 (default: 80)
-squish photos/ -w 1920          # max width, keeps aspect ratio
-squish photos/ -h 1080          # max height, keeps aspect ratio
-squish photos/ -w 1920 -h 1080  # fit into box
-squish -v photos/               # verbose output
+squish photo.jpg                 # -> ./optimized/photo.jpg
+squish photos/                   # entire directory
+squish photos/ -o out/           # custom output dir
+squish photos/ -q 60             # jpeg quality 1-100 (default: 80)
+squish photos/ -w 1920           # max width, keeps aspect ratio
+squish photos/ --height 1080     # max height, keeps aspect ratio
+squish photos/ -w 1920 -h 1080   # fit into box
+squish photos/ --gpu             # GPU acceleration (Windows only)
+squish -v photos/                # verbose output
 ```
 
 ## What happens under the hood
@@ -81,9 +82,9 @@ There's also `dct_avx2.asm` - a handwritten x86-64 assembly DCT kernel.
 ~280 lines of AVX2 intrinsics doing the 8x8 block transform. Written from
 scratch because compiler-generated SIMD wasn't fast enough.
 
-On Windows there's also GPU acceleration via DirectCompute (D3D11) but
-honestly the CPU path is fast enough that GPU overhead makes it pointless.
-Left it in because it was fun to write.
+On Windows there's optional GPU acceleration via DirectCompute (D3D11).
+Enable with `--gpu` flag. Uses GPU for DCT on images >= 1 megapixel.
+CPU path is already fast, but GPU helps on very large batches.
 
 ### PNG encoder
 
@@ -92,12 +93,13 @@ Uses `fpng` by Rich Geldreich. SSE-accelerated deflate, produces valid PNG.
 
 ## Performance
 
-Test: 11,343 mixed images, resize to 2200px width, 6-core CPU
+Test: 11,343 mixed images, 4.8 GB total, 6-core CPU
 
 | Metric     | Value          |
 | ---------- | -------------- |
-| Throughput | 64 images/sec  |
-| Time       | 180 seconds    |
+| Throughput | 52 MB/s        |
+| Speed      | 123 images/sec |
+| Time       | 92 seconds     |
 | Threads    | 6 (auto)       |
 
 Comparison (estimated):
