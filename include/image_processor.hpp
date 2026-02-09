@@ -30,6 +30,7 @@ struct ProcessingOptions {
     int max_height = 0;  // 0 = no resize
     bool preserve_aspect = true;
     bool strip_metadata = true;
+    bool use_gpu = false;  // GPU acceleration for large images
 };
 
 struct ImageData {
@@ -73,7 +74,8 @@ public:
         const ImageData& image,
         const std::filesystem::path& path,
         OutputFormat format,
-        int quality
+        int quality,
+        bool use_gpu = false
     );
 
     // Resize image

@@ -1402,12 +1402,11 @@ public:
 };
 
 // Encode with GPU acceleration if available
-inline size_t encode_jpeg_gpu(uint8_t* buffer, size_t buffer_size, const uint8_t* rgb, int w, int h, int quality = 80) {
-    // GPU currently disabled for debugging - use CPU encoder
-    // if (gpudct::gpu_available() && w * h >= 1000000) {
-    //     GPUMemEncoder enc;
-    //     return enc.encode(buffer, buffer_size, rgb, w, h, quality);
-    // }
+inline size_t encode_jpeg_gpu(uint8_t* buffer, size_t buffer_size, const uint8_t* rgb, int w, int h, int quality = 80, bool use_gpu = false) {
+    if (use_gpu && gpudct::gpu_available() && w * h >= 1000000) {
+        GPUMemEncoder enc;
+        return enc.encode(buffer, buffer_size, rgb, w, h, quality);
+    }
     MemEncoder enc;
     return enc.encode(buffer, buffer_size, rgb, w, h, quality);
 }

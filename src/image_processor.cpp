@@ -142,7 +142,8 @@ bool ImageProcessor::save_image(
     const ImageData& image,
     const std::filesystem::path& path,
     OutputFormat format,
-    int quality
+    int quality,
+    bool use_gpu
 ) {
     auto ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -194,13 +195,14 @@ bool ImageProcessor::save_image(
                         quality
                     );
                 }
-                // gpu version (is eigentlich nicht schneller lol aber whatever)
+                // gpu version wenn gewünscht, sonst cpu
                 size_t actual_size = fastjpeg::encode_jpeg_gpu(
                     mf.data(),
                     mf.size(),
                     image.pixels.data(),
                     image.width, image.height,
-                    quality
+                    quality,
+                    use_gpu
                 );
                 // file auf echte größe kürzen
                 mf.truncate(actual_size);
@@ -326,7 +328,7 @@ ProcessingResult ImageProcessor::process(
     result.output_path = output_dir / output_filename;
     
     // speichern
-    if (!save_image(image, result.output_path, format, options.quality)) {
+    if (!save_image(image, result.output_path, format, options.quality, options.use_gpu)) {
         result.success = false;
         result.error_message = "Failed to save image";
         return result;

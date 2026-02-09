@@ -4,6 +4,8 @@ build_linux/
 cmake-build-*/
 out/
 optimized/
+test_images/
+tools/
 
 # Installer
 *.exe

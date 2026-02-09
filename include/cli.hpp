@@ -15,6 +15,7 @@ struct CLIConfig {
     int max_width = 0;                 // 0 = kein resize
     int max_height = 0;                // 0 = kein resize
     bool verbose = false;
+    bool use_gpu = false;              // GPU acceleration
 };
 
 class CLI {

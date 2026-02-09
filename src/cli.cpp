@@ -44,6 +44,7 @@ OPTIONS
   -w, --width <pixels>   Max width, preserves aspect ratio (default: no resize)
   -h, --height <pixels>  Max height, preserves aspect ratio (default: no resize)
   -v, --verbose          Show progress for each file
+  --gpu                  Use GPU acceleration (DirectCompute, Windows only)
   -H, --help             Show this help message
   --version              Show version number
 
@@ -118,6 +119,9 @@ std::optional<CLIConfig> CLI::parse(int argc, char* argv[]) {
         }
         else if (arg == "-v" || arg == "--verbose") {
             config.verbose = true;
+        }
+        else if (arg == "--gpu") {
+            config.use_gpu = true;
         }
         else if (arg[0] != '-') {
             config.input_paths.emplace_back(arg);
@@ -228,13 +232,14 @@ int CLI::run(const CLIConfig& config) {
     options.format = OutputFormat::AUTO;
     options.max_width = config.max_width;
     options.max_height = config.max_height;
+    options.use_gpu = config.use_gpu;
     
     // threads rausfinden, 4 als fallback
     size_t num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
     
     std::cout << "Optimizing " << files.size() << " image(s) with " << num_threads << " threads";
-    if (fastjpeg::gpu_available()) {
+    if (config.use_gpu && fastjpeg::gpu_available()) {
         std::cout << " + GPU";
     }
     std::cout << "...\n";

@@ -5,6 +5,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Try to enable NASM for handwritten assembly
+include(CheckLanguage)
+check_language(ASM_NASM)
+if(CMAKE_ASM_NASM_COMPILER)
+    enable_language(ASM_NASM)
+    set(HAVE_NASM TRUE)
+    if(WIN32)
+        set(CMAKE_ASM_NASM_FLAGS "-f win64")
+    else()
+        set(CMAKE_ASM_NASM_FLAGS "-f elf64")
+    endif()
+else()
+    set(HAVE_NASM FALSE)
+    message(STATUS "NASM not found, using C++ DCT fallback")
+endif()
+
 # Aggressive optimization flags
 if(MSVC)
     set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob3 /GL /DNDEBUG /arch:AVX2")
@@ -29,6 +45,12 @@ add_executable(squish
     src/cli.cpp
     lib/fpng.cpp
 )
+
+# Add handwritten ASM if NASM is available
+if(HAVE_NASM)
+    target_sources(squish PRIVATE lib/dct_avx2.asm)
+    target_compile_definitions(squish PRIVATE HAVE_DCT_AVX2_ASM=1)
+endif()
 
 target_include_directories(squish PRIVATE 
     ${CMAKE_SOURCE_DIR}/include
