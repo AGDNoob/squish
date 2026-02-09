@@ -1,5 +1,6 @@
 # Shell scripts must have LF line endings
 *.sh text eol=lf
+test.sh text eol=lf
 
 # Windows batch files need CRLF
 *.bat text eol=crlf
