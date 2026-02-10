@@ -7,9 +7,13 @@ no config files, no bullshit. Runs on Windows and Linux.
 
 ## Why this exists
 
-Every image optimizer I tried was either slow, required a subscription,
-or came with 50 dependencies. This one is ~4000 lines of C++, compiles
-to a single static binary, and processes 60+ images per second.
+Every image optimizer I tried was either mass-produced enterprise garbage,
+required a subscription for basic functionality, or dragged in 50 dependencies
+just to resize a JPEG. Unacceptable.
+
+This one is ~4400 lines of C++ (not counting third-party headers), compiles
+to a single static binary, and pushes 77-95 MB/s through your disk. It does
+the job correctly and then gets out of the way.
 
 ## Installation
 
@@ -57,12 +61,14 @@ squish -v photos/                # verbose output
 ## What happens under the hood
 
 1. **Load**: `stb_image` decodes JPEG/PNG/BMP/TGA/GIF into raw RGB
-2. **EXIF**: For JPEG, reads orientation tag and rotates pixels (phone photos)
+2. **EXIF**: Reads orientation tag, rotates pixels. Your phone photos come out right-side-up.
 3. **Resize**: `stb_image_resize2` with Mitchell filter if dimensions specified
-4. **Encode**: Custom SIMD JPEG encoder or `fpng` for PNG
-5. **Write**: Memory-mapped I/O for speed
+4. **Encode**: Custom SIMD JPEG encoder (AVX2 with scalar fallback) or `fpng` for PNG
+5. **Write**: Memory-mapped I/O, atomic writes (`.tmp` + rename, no half-written files)
 
 Each image runs in its own thread. Thread pool uses all available cores.
+STB operations are mutex-protected because STB's global state is not thread-safe
+(and no, "just don't call it from multiple threads" is not a real solution).
 
 ### Skip logic
 
@@ -73,14 +79,16 @@ Re-encoding a JPEG only makes quality worse. Same for PNG at <50% threshold.
 
 The included `fast_jpeg.hpp` is a custom encoder. Uses:
 
-- AVX2/SSE4 for DCT and color conversion
+- AVX2/SSE4 for DCT and color conversion (runtime CPUID detection)
+- Scalar fallback for CPUs without AVX2 — it'll run on your grandma's Pentium
 - Precomputed Huffman tables (no per-image optimization)
 - Buffered output (8KB chunks)
+- `_mm_malloc` with NULL checks and graceful fallback (no silent corruption on OOM)
 - ~2x faster than stb_image_write, quality is identical
 
-There's also `dct_avx2.asm` - a handwritten x86-64 assembly DCT kernel.
-~280 lines of AVX2 intrinsics doing the 8x8 block transform. Written from
-scratch because compiler-generated SIMD wasn't fast enough.
+There's also `dct_avx2.asm` — ~330 lines of handwritten x86-64 assembly doing
+the 8x8 block DCT. Written from scratch because the compiler's auto-vectorizer
+produced embarrassing code.
 
 On Windows there's optional GPU acceleration via DirectCompute (D3D11).
 Enable with `--gpu` flag. Uses GPU for DCT on images >= 1 megapixel.
@@ -148,17 +156,38 @@ lib/
 Everything in `lib/` except fast_jpeg.hpp, fast_resize.hpp, dct_avx2.asm, exif_orient.hpp,
 mmap_file.hpp, and gpu_dct.hpp is third-party. All included, no external dependencies.
 
+## Hardening
+
+This thing is built to not break. If your image optimizer corrupts files or
+crashes on bad input, you wrote it wrong.
+
+- **Atomic writes**: Output goes to `.tmp` first, then `rename()`. Power loss
+  mid-write won't leave you with half a JPEG.
+- **AVX2 safety**: Binary runs on any x86-64 CPU. AVX2 code paths are gated
+  behind CPUID checks and `__attribute__((target))`. No illegal instruction traps.
+- **Symlink protection**: Directory traversal won't follow symlinks into `/etc`.
+  500k file limit to prevent zip-bomb style directory attacks.
+- **Path traversal**: Output paths are sanitized. No `../../` nonsense.
+- **OOM handling**: Every allocation is checked. `_mm_malloc` failures fall back
+  to scalar. `vector::resize` failures get caught and reported, not ignored.
+- **Thread safety**: STB's global state is mutex-protected. Because apparently
+  "not thread-safe" means most people just cross their fingers.
+- **No `-ffast-math`**: Uses `-funsafe-math-optimizations -fno-math-errno
+  -fno-trapping-math` instead. NaN propagation works. Your images don't turn green.
+
 ## Limitations
 
-Things this doesn't do:
+Things this doesn't do, and I'm not going to pretend otherwise:
 
-- **WebP**: stb doesn't support it, adding libwebp means actual dependencies
-- **EXIF preservation**: we read orientation, rotate pixels, strip the rest
-- **Animated GIF**: first frame only
-- **Lossless JPEG rotation**: we decode and re-encode, some quality loss
-- **Content-aware quality**: fixed quality setting, no perceptual analysis
+- **WebP**: stb doesn't support it. Adding libwebp means real dependencies.
+- **EXIF preservation**: We read orientation, rotate pixels, strip the rest.
+  If you need EXIF, use something else.
+- **Animated GIF**: First frame only. Animated image "optimization" is a different problem.
+- **Lossless JPEG rotation**: We decode and re-encode. Some quality loss. That's how math works.
+- **Content-aware quality**: Fixed quality setting. No perceptual analysis.
+  You pick the number, you live with the number.
 
-These could be added. PRs welcome if you need them.
+PRs welcome if you actually need these.
 
 ## Building
 
@@ -167,22 +196,13 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-That's it. C++20 required. GCC 13+, Clang 16+, or MSVC 2022.
-
-Debug build:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-```
-
-Run tests:
+C++20, GCC 13+, Clang 16+, or MSVC 2022. If your compiler is older, upgrade it.
 
 ```bash
 ./test.sh
 ```
 
-Smoke test for basic functionality. Real test suite: 50,000+ images, works or it doesn't.
+Smoke test. Verifies basic functionality. If it passes, ship it.
 
 ## License
 
