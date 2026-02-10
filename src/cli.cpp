@@ -100,6 +100,10 @@ std::optional<CLIConfig> CLI::parse(int argc, char* argv[]) {
             }
             try {
                 config.max_width = std::stoi(argv[i]);
+                if (config.max_width <= 0) {
+                    std::cerr << "Error: Width must be positive\n";
+                    return std::nullopt;
+                }
             } catch (...) {
                 std::cerr << "Error: Invalid width value\n";
                 return std::nullopt;
@@ -112,6 +116,10 @@ std::optional<CLIConfig> CLI::parse(int argc, char* argv[]) {
             }
             try {
                 config.max_height = std::stoi(argv[i]);
+                if (config.max_height <= 0) {
+                    std::cerr << "Error: Height must be positive\n";
+                    return std::nullopt;
+                }
             } catch (...) {
                 std::cerr << "Error: Invalid height value\n";
                 return std::nullopt;
@@ -160,10 +168,22 @@ std::vector<std::filesystem::path> CLI::collect_files(
         
         if (std::filesystem::is_directory(path)) {
             // rekursiv alle bilder sammeln
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
-                if (entry.is_regular_file() && ImageProcessor::is_supported(entry.path())) {
-                    files.push_back(entry.path());
+            // SYMLINK FIX: Don't follow symlinks (prevents infinite loops)
+            // Also wrap in try-catch for permission errors mid-traversal
+            try {
+                constexpr size_t MAX_FILES = 500000;  // Sanity limit
+                for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                    path, std::filesystem::directory_options::skip_permission_denied)) {
+                    if (entry.is_regular_file() && !entry.is_symlink() && ImageProcessor::is_supported(entry.path())) {
+                        files.push_back(entry.path());
+                        if (files.size() >= MAX_FILES) {
+                            std::cerr << "Warning: File limit (" << MAX_FILES << ") reached, stopping scan\n";
+                            break;
+                        }
+                    }
                 }
+            } catch (const std::filesystem::filesystem_error& e) {
+                std::cerr << "Warning: Error scanning " << path << ": " << e.what() << "\n";
             }
         } else if (std::filesystem::is_regular_file(path)) {
             if (ImageProcessor::is_supported(path)) {
@@ -235,8 +255,10 @@ int CLI::run(const CLIConfig& config) {
     options.use_gpu = config.use_gpu;
     
     // threads rausfinden, 4 als fallback
+    // Use physical cores (~75% of logical) to avoid hyper-threading penalties and thermal throttling
     size_t num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4;
+    num_threads = std::max(size_t(2), (num_threads * 3) / 4);  // 75% of logical cores
     
     std::cout << "Optimizing " << files.size() << " image(s) with " << num_threads << " threads";
     if (config.use_gpu && fastjpeg::gpu_available()) {
@@ -314,6 +336,13 @@ int CLI::run(const CLIConfig& config) {
     
     print_summary(results, total_time);
     
+    // EXIT CODE FIX: Return non-zero if any images failed
+    size_t total_failures = 0;
+    for (const auto& r : results) {
+        if (!r.success) total_failures++;
+    }
+    if (total_failures == results.size()) return 2;  // All failed
+    if (total_failures > 0) return 1;                 // Partial failure
     return 0;
 }
 

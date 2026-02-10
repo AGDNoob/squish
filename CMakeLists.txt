@@ -23,15 +23,22 @@ endif()
 
 # Aggressive optimization flags
 if(MSVC)
-    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob3 /GL /DNDEBUG /arch:AVX2")
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/LTCG")
+    # LEGACY HARDWARE FIX: Removed /arch:AVX2 - was crashing on pre-Haswell CPUs
+    # AVX2 functions use __declspec(target) attributes instead for runtime dispatch
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob3 /DNDEBUG")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "")
 elseif(WIN32)
     # MinGW on Windows: static linking for portable builds
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG")
+    # LEGACY HARDWARE FIX: Use x86-64-v2 (SSE4.2) baseline + explicit -mno-avx2
+    # Even with function attributes, LTO can leak AVX2 into main() - disable globally
+    # FAST-MATH FIX: Use safe subset instead of -ffast-math to keep NaN/Inf checks working
+    # -ffast-math implies -ffinite-math-only which makes NaN checks UB (dangerous with zero-dimension images)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=x86-64-v2 -msse4.2 -mno-avx2 -funsafe-math-optimizations -fno-math-errno -fno-trapping-math -funroll-loops -DNDEBUG")
     set(CMAKE_EXE_LINKER_FLAGS "-static -static-libgcc -static-libstdc++")
 else()
     # Linux: dynamic linking (glibc doesnt like static)
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG")
+    # LEGACY HARDWARE FIX: Use x86-64-v2 baseline for portability
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=x86-64-v2 -msse4.2 -funsafe-math-optimizations -fno-math-errno -fno-trapping-math -funroll-loops -DNDEBUG")
 endif()
 
 # Find threads

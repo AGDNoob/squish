@@ -82,7 +82,7 @@ public:
     ImageData resize(const ImageData& image, int new_width, int new_height);
 
     // welche extensions gehen
-    static std::vector<std::string> supported_extensions();
+    static const std::vector<std::string>& supported_extensions();
     static bool is_supported(const std::filesystem::path& path);
 };
 

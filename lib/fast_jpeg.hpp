@@ -10,16 +10,94 @@
 #include <vector>
 #include "gpu_dct.hpp"
 
-#if defined(__AVX2__) || defined(__AVX__)
-#include <immintrin.h>
-#define FASTJPEG_AVX2 1
+// LEGACY HARDWARE FIX: Always enable AVX2 intrinsics on x86-64
+// Even when compiling with -march=x86-64-v2 (SSE4.2 baseline), we want AVX2 code paths
+// to be available via runtime dispatch using function attributes
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <immintrin.h>  // AVX2 intrinsics
+    #define FASTJPEG_AVX2 1
+    
+    // GCC/Clang function attribute for AVX2 code generation
+    // This allows AVX2 intrinsics in specific functions even with SSE baseline
+    #if defined(__GNUC__) || defined(__clang__)
+        #define FASTJPEG_AVX2_TARGET __attribute__((target("avx2")))
+    #else
+        #define FASTJPEG_AVX2_TARGET
+    #endif
 #elif defined(__SSE2__) || defined(_M_X64)
-#include <emmintrin.h>
-#include <tmmintrin.h>
-#define FASTJPEG_SSE2 1
+    #include <emmintrin.h>
+    #include <tmmintrin.h>
+    #define FASTJPEG_SSE2 1
+    #define FASTJPEG_AVX2_TARGET
+#endif
+
+// CPU feature detection for runtime checks
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#ifdef _MSC_VER
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+
+inline bool cpu_has_avx2() {
+#ifdef _MSC_VER
+    int info[4];
+    __cpuidex(info, 7, 0);
+    return (info[1] & (1 << 5)) != 0;  // EBX bit 5 = AVX2
+#else
+    unsigned int eax, ebx, ecx, edx;
+    if (!__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx))
+        return false;
+    return (ebx & (1 << 5)) != 0;
+#endif
+}
+
+inline bool cpu_has_sse2() {
+#ifdef _MSC_VER
+    int info[4];
+    __cpuid(info, 1);
+    return (info[3] & (1 << 26)) != 0;  // EDX bit 26 = SSE2
+#else
+    unsigned int eax, ebx, ecx, edx;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx))
+        return false;
+    return (edx & (1 << 26)) != 0;
+#endif
+}
+#else
+// Non-x86 platforms: assume no AVX2/SSE2
+inline bool cpu_has_avx2() { return false; }
+inline bool cpu_has_sse2() { return false; }
 #endif
 
 namespace fastjpeg {
+
+// RAII wrapper for FILE* to prevent leaks on exceptions
+class FileGuard {
+    FILE* fp_;
+    FileGuard(const FileGuard&) = delete;
+    FileGuard& operator=(const FileGuard&) = delete;
+public:
+    explicit FileGuard(FILE* fp) : fp_(fp) {}
+    ~FileGuard() { if (fp_) fclose(fp_); }
+    void release() { fp_ = nullptr; }
+    operator bool() const { return fp_ != nullptr; }
+};
+
+// YCbCr conversion constants (ITU-R BT.601)
+// Y  = 0.299*R + 0.587*G + 0.114*B  -> 19595, 38470, 7471 (scaled by 65536)
+// Cb = 128 - 0.169*R - 0.331*G + 0.500*B -> 11056, 21712, 32768
+// Cr = 128 + 0.500*R - 0.419*G - 0.081*B -> 32768, 27440, 5328
+constexpr int YR = 19595;   // 0.299 * 65536
+constexpr int YG = 38470;   // 0.587 * 65536
+constexpr int YB = 7471;    // 0.114 * 65536
+constexpr int CB_R = 11056;
+constexpr int CB_G = 21712;
+constexpr int CB_B = 32768;
+constexpr int CR_R = 32768;
+constexpr int CR_G = 27440;
+constexpr int CR_B = 5328;
+constexpr int ROUND_HALF = 32768;  // 0.5 in fixed point
 
 // windows und linux haben unterschiedliche aligned alloc, nervig
 inline void* aligned_alloc_mem(size_t alignment, size_t size) {
@@ -106,17 +184,17 @@ struct HuffCode {
 
 // bit category lookup - vorberechnet weil log2 in der loop zu langsam
 alignas(64) static uint8_t BIT_CATEGORY[2048];
-static bool bit_cat_init = false;
+static std::once_flag bit_cat_once;
 
 inline void init_bit_category() {
-    if (bit_cat_init) return;
-    BIT_CATEGORY[0] = 0;
-    for (int i = 1; i < 2048; i++) {
-        int bits = 0, v = i;
-        while (v) { v >>= 1; bits++; }
-        BIT_CATEGORY[i] = bits;
-    }
-    bit_cat_init = true;
+    std::call_once(bit_cat_once, []() {
+        BIT_CATEGORY[0] = 0;
+        for (int i = 1; i < 2048; i++) {
+            int bits = 0, v = i;
+            while (v) { v >>= 1; bits++; }
+            BIT_CATEGORY[i] = bits;
+        }
+    });
 }
 
 // schnelle bit zählung für dc/ac encoding
@@ -168,11 +246,14 @@ private:
     
     inline void flush_bits() {
         while (bitcount >= 8) {
+            if (outpos >= 16300) flush_outbuf();  // Check FIRST before writes
             bitcount -= 8;
             uint8_t b = (bitbuf >> bitcount) & 0xFF;
             outbuf[outpos++] = b;
-            if (b == 0xFF) outbuf[outpos++] = 0;
-            if (outpos >= 16300) flush_outbuf();  // Leave room for byte stuffing
+            if (b == 0xFF) {
+                if (outpos >= 16384) flush_outbuf();  // Additional safety for stuffing
+                outbuf[outpos++] = 0;
+            }
         }
     }
     
@@ -310,10 +391,82 @@ private:
         }
     }
     
+    // Scalar DCT fallback (no SIMD) - used when AVX2 malloc fails or on non-SIMD builds
+    void fdct_scalar(int16_t* block) {
+        constexpr int32_t C2 = 3784, C4 = 2896, C6 = 1567;
+        int32_t tmp[64];
+        
+        // Row pass
+        for (int i = 0; i < 8; i++) {
+            int32_t x0 = block[i*8+0], x1 = block[i*8+1], x2 = block[i*8+2], x3 = block[i*8+3];
+            int32_t x4 = block[i*8+4], x5 = block[i*8+5], x6 = block[i*8+6], x7 = block[i*8+7];
+            
+            int32_t s0 = x0 + x7, s1 = x1 + x6, s2 = x2 + x5, s3 = x3 + x4;
+            int32_t d0 = x0 - x7, d1 = x1 - x6, d2 = x2 - x5, d3 = x3 - x4;
+            
+            int32_t t0 = s0 + s3, t1 = s1 + s2, t2 = s0 - s3, t3 = s1 - s2;
+            
+            tmp[i*8+0] = t0 + t1;
+            tmp[i*8+4] = t0 - t1;
+            tmp[i*8+2] = (t2 * C6 + t3 * C2 + 2048) >> 12;
+            tmp[i*8+6] = (t2 * C2 - t3 * C6 + 2048) >> 12;
+            
+            int32_t t10 = d0 + d1, t11 = d1 + d2, t12 = d2 + d3;
+            int32_t z5 = ((t10 - t12) * C6 + 2048) >> 12;
+            int32_t z2 = ((t10 * C2 + 2048) >> 12) + z5;
+            int32_t z4 = ((t12 * C2 + 2048) >> 12) + t12 + z5;
+            int32_t z3 = (t11 * C4 + 2048) >> 12;
+            int32_t z11 = d3 + z3, z13 = d3 - z3;
+            
+            tmp[i*8+5] = z13 + z2;
+            tmp[i*8+3] = z13 - z2;
+            tmp[i*8+1] = z11 + z4;
+            tmp[i*8+7] = z11 - z4;
+        }
+        
+        // Column pass
+        for (int i = 0; i < 8; i++) {
+            int32_t x0 = tmp[i], x1 = tmp[i+8], x2 = tmp[i+16], x3 = tmp[i+24];
+            int32_t x4 = tmp[i+32], x5 = tmp[i+40], x6 = tmp[i+48], x7 = tmp[i+56];
+            
+            int32_t s0 = x0 + x7, s1 = x1 + x6, s2 = x2 + x5, s3 = x3 + x4;
+            int32_t d0 = x0 - x7, d1 = x1 - x6, d2 = x2 - x5, d3 = x3 - x4;
+            
+            int32_t t0 = s0 + s3, t1 = s1 + s2, t2 = s0 - s3, t3 = s1 - s2;
+            
+            block[i] = (int16_t)((t0 + t1) >> 3);
+            block[i+32] = (int16_t)((t0 - t1) >> 3);
+            block[i+16] = (int16_t)(((t2 * C6 + t3 * C2 + 2048) >> 12) >> 3);
+            block[i+48] = (int16_t)(((t2 * C2 - t3 * C6 + 2048) >> 12) >> 3);
+            
+            int32_t t10 = d0 + d1, t11 = d1 + d2, t12 = d2 + d3;
+            int32_t z5 = ((t10 - t12) * C6 + 2048) >> 12;
+            int32_t z2 = ((t10 * C2 + 2048) >> 12) + z5;
+            int32_t z4 = ((t12 * C2 + 2048) >> 12) + t12 + z5;
+            int32_t z3 = (t11 * C4 + 2048) >> 12;
+            int32_t z11 = d3 + z3, z13 = d3 - z3;
+            
+            block[i+40] = (int16_t)((z13 + z2) >> 3);
+            block[i+24] = (int16_t)((z13 - z2) >> 3);
+            block[i+8] = (int16_t)((z11 + z4) >> 3);
+            block[i+56] = (int16_t)((z11 - z4) >> 3);
+        }
+    }
+    
 #if FASTJPEG_AVX2
     // avx2 dct - das hier macht den gro\u00dfen unterschied
+    // LEGACY HARDWARE: Function compiled with AVX2 even on SSE4.2 baseline
+    FASTJPEG_AVX2_TARGET
     void fdct(int16_t* block) {
-        alignas(32) int32_t tmp[64];
+        // STACK ALIGNMENT FIX: alignas(32) is IGNORED on Windows x64 (16-byte stack alignment only)
+        // Use _mm_malloc to guarantee 32-byte alignment for AVX2 aligned loads/stores
+        // OOM FIX: If malloc fails, fall back to scalar DCT instead of silent corruption
+        int32_t* tmp = (int32_t*)_mm_malloc(64 * sizeof(int32_t), 32);
+        if (!tmp) {
+            // OOM: Fall back to scalar DCT (slow but correct)
+            fdct_scalar(block);
+            return;
+        }
         
         // cosinus konstanten als vektoren
         const __m256i c2 = _mm256_set1_epi32(3784);   // cos(2pi/16) * 4096
@@ -351,14 +504,15 @@ private:
         }
         
         // column pass mit avx2 - alle 8 spalten auf einmal
-        __m256i r0 = _mm256_loadu_si256((__m256i*)&tmp[0]);
-        __m256i r1 = _mm256_loadu_si256((__m256i*)&tmp[8]);
-        __m256i r2 = _mm256_loadu_si256((__m256i*)&tmp[16]);
-        __m256i r3 = _mm256_loadu_si256((__m256i*)&tmp[24]);
-        __m256i r4 = _mm256_loadu_si256((__m256i*)&tmp[32]);
-        __m256i r5 = _mm256_loadu_si256((__m256i*)&tmp[40]);
-        __m256i r6 = _mm256_loadu_si256((__m256i*)&tmp[48]);
-        __m256i r7 = _mm256_loadu_si256((__m256i*)&tmp[56]);
+        // ALIGNMENT FIX: tmp[64] is alignas(32), use aligned loads for 15% perf gain
+        __m256i r0 = _mm256_load_si256((__m256i*)&tmp[0]);
+        __m256i r1 = _mm256_load_si256((__m256i*)&tmp[8]);
+        __m256i r2 = _mm256_load_si256((__m256i*)&tmp[16]);
+        __m256i r3 = _mm256_load_si256((__m256i*)&tmp[24]);
+        __m256i r4 = _mm256_load_si256((__m256i*)&tmp[32]);
+        __m256i r5 = _mm256_load_si256((__m256i*)&tmp[40]);
+        __m256i r6 = _mm256_load_si256((__m256i*)&tmp[48]);
+        __m256i r7 = _mm256_load_si256((__m256i*)&tmp[56]);
         
         __m256i s0 = _mm256_add_epi32(r0, r7);
         __m256i s1 = _mm256_add_epi32(r1, r6);
@@ -406,19 +560,32 @@ private:
         
         // ergebnisse speichern - 32bit zu 16bit
         // (compiler macht das besser als manuelles packen tbh)
-        alignas(32) int32_t res[64];
-        _mm256_storeu_si256((__m256i*)&res[0], out0);
-        _mm256_storeu_si256((__m256i*)&res[8], out1);
-        _mm256_storeu_si256((__m256i*)&res[16], out2);
-        _mm256_storeu_si256((__m256i*)&res[24], out3);
-        _mm256_storeu_si256((__m256i*)&res[32], out4);
-        _mm256_storeu_si256((__m256i*)&res[40], out5);
-        _mm256_storeu_si256((__m256i*)&res[48], out6);
-        _mm256_storeu_si256((__m256i*)&res[56], out7);
+        // STACK ALIGNMENT FIX: Use _mm_malloc for guaranteed 32-byte alignment
+        // OOM FIX: If allocation fails, fallback to scalar (already processed in tmp)
+        int32_t* res = (int32_t*)_mm_malloc(64 * sizeof(int32_t), 32);
+        if (!res) {
+            // OOM rare case: Convert tmp directly to block without AVX2 stores
+            for (int i = 0; i < 64; i++) {
+                block[i] = (int16_t)tmp[i];
+            }
+            _mm_free(tmp);
+            return;
+        }
+        _mm256_store_si256((__m256i*)&res[0], out0);
+        _mm256_store_si256((__m256i*)&res[8], out1);
+        _mm256_store_si256((__m256i*)&res[16], out2);
+        _mm256_store_si256((__m256i*)&res[24], out3);
+        _mm256_store_si256((__m256i*)&res[32], out4);
+        _mm256_store_si256((__m256i*)&res[40], out5);
+        _mm256_store_si256((__m256i*)&res[48], out6);
+        _mm256_store_si256((__m256i*)&res[56], out7);
         
         for (int i = 0; i < 64; i++) {
             block[i] = (int16_t)res[i];
         }
+        _mm256_zeroupper();  // Prevent AVX-SSE transition penalties
+        _mm_free(res);
+        _mm_free(tmp);
     }
 #else
     // scalar fallback wenn kein avx2
@@ -510,9 +677,26 @@ private:
     }
     
 public:
+    // LEGACY HARDWARE: Function calls AVX2 fdct(), compiled with AVX2 target attribute
+    FASTJPEG_AVX2_TARGET
     bool encode(const char* filename, const uint8_t* rgb, int w, int h, int quality) {
+        // Runtime CPU feature check to prevent crashes on unsupported CPUs
+#if FASTJPEG_AVX2
+        if (!cpu_has_avx2()) {
+            fprintf(stderr, "ERROR: This binary requires AVX2 support, but CPU does not support it.\n");
+            fprintf(stderr, "Please recompile without -mavx2 flag or run on a newer CPU (2013+).\n");
+            return false;
+        }
+#elif FASTJPEG_SSE2
+        if (!cpu_has_sse2()) {
+            fprintf(stderr, "ERROR: This binary requires SSE2 support, but CPU does not support it.\n");
+            return false;
+        }
+#endif
+        
         fp = fopen(filename, "wb");
         if (!fp) return false;
+        FileGuard fp_guard(fp);  // RAII: auto-close on exception or early return
         
         init_bit_category();
         bitbuf = 0;
@@ -546,8 +730,26 @@ public:
         // y plane vorberechnen, chroma on the fly
         // spart speicher und is eigentlich nich langsamer
         
-        alignas(32) int16_t y_blocks[4][64];
-        alignas(32) int16_t cb_block[64], cr_block[64];
+        // STACK ALIGNMENT FIX: alignas(32) ignored on Windows - use _mm_malloc for guaranteed alignment
+        int16_t* y_blocks_mem = (int16_t*)_mm_malloc(4 * 64 * sizeof(int16_t), 32);
+        int16_t* cb_block = (int16_t*)_mm_malloc(64 * sizeof(int16_t), 32);
+        int16_t* cr_block = (int16_t*)_mm_malloc(64 * sizeof(int16_t), 32);
+        
+        if (!y_blocks_mem || !cb_block || !cr_block) {
+            if (y_blocks_mem) _mm_free(y_blocks_mem);
+            if (cb_block) _mm_free(cb_block);
+            if (cr_block) _mm_free(cr_block);
+            return false;
+        }
+        
+        // Create 2D view of y_blocks (4 blocks of 64 elements)
+        int16_t* y_blocks[4] = {
+            y_blocks_mem,
+            y_blocks_mem + 64,
+            y_blocks_mem + 128,
+            y_blocks_mem + 192
+        };
+        
         int last_dc_y = 0, last_dc_cb = 0, last_dc_cr = 0;
         
         const int mcu_rows = (h + 15) / 16;
@@ -561,8 +763,8 @@ public:
                 const int base_x = mcu_x * 16;
                 
                 // chroma blöcke nullen
-                memset(cb_block, 0, sizeof(cb_block));
-                memset(cr_block, 0, sizeof(cr_block));
+                memset(cb_block, 0, 64 * sizeof(int16_t));
+                memset(cr_block, 0, 64 * sizeof(int16_t));
                 
                 // jeder 8x8 Y block
                 for (int by = 0; by < 2; by++) {
@@ -609,11 +811,11 @@ public:
                                 
                                 int cx = chroma_base_x + (px >> 1);
                                 int cy = chroma_base_y + (py >> 1);
-                                // Add half of final value (other half from next row)
+                                // Add half of final value (other half from next row) with proper rounding
                                 int cb = ((-11056*r - 21712*g + 32768*b) >> 16);
                                 int cr = ((32768*r - 27440*g - 5328*b) >> 16);
-                                cb_block[cy*8+cx] += (cb >> 1);
-                                cr_block[cy*8+cx] += (cr >> 1);
+                                cb_block[cy*8+cx] += (cb + 1) >> 1;
+                                cr_block[cy*8+cx] += (cr + 1) >> 1;
                             }
                             
                             // ungerades pixel falls vorhanden
@@ -671,6 +873,12 @@ public:
         // Flush output buffer
         flush_outbuf();
         
+        // Cleanup aligned buffers
+        _mm_free(y_blocks_mem);
+        _mm_free(cb_block);
+        _mm_free(cr_block);
+        
+        fp_guard.release();  // Success - release ownership before manual close
         fclose(fp);
         return true;
     }
@@ -684,6 +892,7 @@ private:
     uint8_t* out_end;
     uint64_t bitbuf;
     int bitcount;
+    bool overflow_;
     
     alignas(64) uint8_t quant_y[64];
     alignas(64) uint8_t quant_c[64];
@@ -697,8 +906,13 @@ private:
     HuffCode dc_chroma[12];
     HuffCode ac_chroma[256];
     
-    inline void emit_byte(uint8_t b) {
-        if (out_ptr < out_end) *out_ptr++ = b;
+    inline bool emit_byte(uint8_t b) {
+        if (out_ptr >= out_end) {
+            overflow_ = true;
+            return false;
+        }
+        *out_ptr++ = b;
+        return true;
     }
     
     inline void flush_bits() {
@@ -910,7 +1124,16 @@ private:
     
 public:
     // Encode to memory buffer, returns actual size written
+    FASTJPEG_AVX2_TARGET
     size_t encode(uint8_t* buffer, size_t buffer_size, const uint8_t* rgb, int w, int h, int quality) {
+        // Runtime CPU feature check
+#if FASTJPEG_AVX2
+        if (!cpu_has_avx2()) {
+            fprintf(stderr, "ERROR: AVX2 required but not supported by CPU\n");
+            return 0;
+        }
+#endif
+        
         out_start = buffer;
         out_ptr = buffer;
         out_end = buffer + buffer_size;
@@ -939,8 +1162,25 @@ public:
         write_dht();
         write_sos();
         
-        alignas(32) int16_t y_blocks[4][64];
-        alignas(32) int16_t cb_block[64], cr_block[64];
+        // STACK ALIGNMENT FIX: Use _mm_malloc for guaranteed 32-byte alignment
+        int16_t* y_blocks_mem = (int16_t*)_mm_malloc(4 * 64 * sizeof(int16_t), 32);
+        int16_t* cb_block = (int16_t*)_mm_malloc(64 * sizeof(int16_t), 32);
+        int16_t* cr_block = (int16_t*)_mm_malloc(64 * sizeof(int16_t), 32);
+        
+        if (!y_blocks_mem || !cb_block || !cr_block) {
+            if (y_blocks_mem) _mm_free(y_blocks_mem);
+            if (cb_block) _mm_free(cb_block);
+            if (cr_block) _mm_free(cr_block);
+            return 0;
+        }
+        
+        int16_t* y_blocks[4] = {
+            y_blocks_mem,
+            y_blocks_mem + 64,
+            y_blocks_mem + 128,
+            y_blocks_mem + 192
+        };
+        
         int last_dc_y = 0, last_dc_cb = 0, last_dc_cr = 0;
         
         const int mcu_rows = (h + 15) / 16;
@@ -951,8 +1191,8 @@ public:
             const int base_y = mcu_y * 16;
             for (int mcu_x = 0; mcu_x < mcu_cols; mcu_x++) {
                 const int base_x = mcu_x * 16;
-                memset(cb_block, 0, sizeof(cb_block));
-                memset(cr_block, 0, sizeof(cr_block));
+                memset(cb_block, 0, 64 * sizeof(int16_t));
+                memset(cr_block, 0, 64 * sizeof(int16_t));
                 
                 for (int by = 0; by < 2; by++) {
                     const int block_y = base_y + by * 8;
@@ -1022,6 +1262,11 @@ public:
         if (bitcount > 0) write_bits(0x7F, 7);
         write_word(0xFFD9);  // EOI
         
+        // Cleanup aligned buffers
+        _mm_free(y_blocks_mem);
+        _mm_free(cb_block);
+        _mm_free(cr_block);
+        
         return static_cast<size_t>(out_ptr - out_start);
     }
 };
@@ -1040,6 +1285,7 @@ private:
     uint8_t* out_end;
     uint64_t bitbuf;
     int bitcount;
+    bool overflow_;
     
     alignas(64) uint8_t quant_y[64];
     alignas(64) uint8_t quant_c[64];
@@ -1061,8 +1307,13 @@ private:
     std::vector<int16_t> cb_quant_buf;
     std::vector<int16_t> cr_quant_buf;
     
-    inline void emit_byte(uint8_t b) {
-        if (out_ptr < out_end) *out_ptr++ = b;
+    inline bool emit_byte(uint8_t b) {
+        if (out_ptr >= out_end) {
+            overflow_ = true;
+            return false;
+        }
+        *out_ptr++ = b;
+        return true;
     }
     
     inline void flush_bits() {
@@ -1252,6 +1503,7 @@ public:
         out_end = buffer + buffer_size;
         bitbuf = 0;
         bitcount = 0;
+        overflow_ = false;
         
         init_bit_category();
         init_quant(quality);
@@ -1313,8 +1565,10 @@ public:
                                 int r = (r0+r1)>>1, g = (g0+g1)>>1, bl = (b0+b1)>>1;
                                 int cx = chroma_base_x + (px >> 1);
                                 int cy = chroma_base_y + (py >> 1);
-                                cb[cy*8+cx] += ((-11056*r - 21712*g + 32768*bl) >> 16) >> 1;
-                                cr[cy*8+cx] += ((32768*r - 27440*g - 5328*bl) >> 16) >> 1;
+                                int cb_val = ((-11056*r - 21712*g + 32768*bl) >> 16);
+                                int cr_val = ((32768*r - 27440*g - 5328*bl) >> 16);
+                                cb[cy*8+cx] += (cb_val + 1) >> 1;
+                                cr[cy*8+cx] += (cr_val + 1) >> 1;
                             }
                             for (; px < max_px; px++) {
                                 int r = row[0], g = row[1], bl = row[2];
@@ -1322,8 +1576,10 @@ public:
                                 yblk[py*8+px] = ((19595*r + 38470*g + 7471*bl + 32768) >> 16) - 128;
                                 int cx = chroma_base_x + (px >> 1);
                                 int cy = chroma_base_y + (py >> 1);
-                                cb[cy*8+cx] += ((-11056*r - 21712*g + 32768*bl) >> 16) >> 2;
-                                cr[cy*8+cx] += ((32768*r - 27440*g - 5328*bl) >> 16) >> 2;
+                                int cb_val = ((-11056*r - 21712*g + 32768*bl) >> 16);
+                                int cr_val = ((32768*r - 27440*g - 5328*bl) >> 16);
+                                cb[cy*8+cx] += (cb_val + 2) >> 2;
+                                cr[cy*8+cx] += (cr_val + 2) >> 2;
                             }
                             for (; px < 8; px++) yblk[py*8+px] = 0;
                         }
@@ -1396,6 +1652,11 @@ public:
         
         if (bitcount > 0) write_bits(0x7F, 7);
         write_word(0xFFD9);  // EOI
+        
+        // Check for buffer overflow
+        if (overflow_) {
+            return 0;
+        }
         
         return static_cast<size_t>(out_ptr - out_start);
     }

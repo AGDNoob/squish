@@ -252,6 +252,9 @@ namespace fpng
 	// See Fast CRC Computation for Generic Polynomials Using PCLMULQDQ Instruction":
 	// https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/fast-crc-computation-generic-polynomials-pclmulqdq-paper.pdf
 	// Requires PCLMUL and SSE 4.1. This function skips Step 1 (fold by 4) for simplicity/less code.
+#ifdef __GNUC__
+	__attribute__((target("pclmul,sse4.1")))
+#endif
 	static uint32_t crc32_pclmul(const uint8_t* p, size_t size, uint32_t crc)
 	{
 		assert(size >= 16);

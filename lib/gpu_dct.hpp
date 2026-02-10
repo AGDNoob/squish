@@ -22,6 +22,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <cstring>
 
 namespace gpudct {
@@ -325,13 +326,12 @@ public:
 
 // Global GPU context (lazy init, thread-safe)
 inline GPUContext& get_gpu() {
+    static std::once_flag init_flag;
     static GPUContext ctx;
-    static std::atomic<bool> init_attempted{false};
-    static std::atomic<bool> init_success{false};
     
-    if (!init_attempted.exchange(true)) {
-        init_success = ctx.init();
-    }
+    std::call_once(init_flag, []() {
+        ctx.init();
+    });
     return ctx;
 }
 

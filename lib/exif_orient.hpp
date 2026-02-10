@@ -31,6 +31,16 @@ enum class Orientation : uint8_t {
     Rotate270 = 8
 };
 
+// RAII helper for FILE* to prevent leaks
+struct FileGuard {
+    FILE* fp;
+    explicit FileGuard(FILE* f) : fp(f) {}
+    ~FileGuard() { if (fp) fclose(fp); }
+    operator FILE*() const { return fp; }
+    FileGuard(const FileGuard&) = delete;
+    FileGuard& operator=(const FileGuard&) = delete;
+};
+
 // orientation aus memory buffer lesen (kein file io)
 // gibt 1 (normal) zurück wenn kein exif gefunden
 inline int read_jpeg_orientation_mem(const uint8_t* buf, size_t len) {
@@ -68,7 +78,10 @@ inline int read_jpeg_orientation_mem(const uint8_t* buf, size_t len) {
         }
         
         // segment länge
+        if (pos + 4 > len) return 1;  // Need at least 4 bytes for marker + length
         uint16_t seg_len = (buf[pos + 2] << 8) | buf[pos + 3];
+        if (seg_len < 2) return 1;  // Segment length must include the 2-byte length field
+        if (pos + 2 + seg_len > len) return 1;  // Validate before advancing
         
         // APP1 marker mit EXIF
         if (marker == 0xE1 && pos + 10 < len) {
@@ -78,8 +91,19 @@ inline int read_jpeg_orientation_mem(const uint8_t* buf, size_t len) {
                 size_t tiff_start = pos + 10;
                 if (tiff_start + 8 > len) return 1;
                 
-                // byte order
-                bool big_endian = (buf[tiff_start] == 'M');
+                // Validate TIFF magic number and byte order
+                bool big_endian;
+                if (buf[tiff_start] == 'M' && buf[tiff_start + 1] == 'M') {
+                    big_endian = true;
+                    // Validate magic 0x002A in big-endian
+                    if (((buf[tiff_start + 2] << 8) | buf[tiff_start + 3]) != 0x002A) return 1;
+                } else if (buf[tiff_start] == 'I' && buf[tiff_start + 1] == 'I') {
+                    big_endian = false;
+                    // Validate magic 0x002A in little-endian
+                    if ((buf[tiff_start + 2] | (buf[tiff_start + 3] << 8)) != 0x002A) return 1;
+                } else {
+                    return 1;  // Invalid TIFF header
+                }
                 
                 auto read16 = [&](size_t offset) -> uint16_t {
                     if (tiff_start + offset + 2 > len) return 0;
@@ -101,6 +125,9 @@ inline int read_jpeg_orientation_mem(const uint8_t* buf, size_t len) {
                 
                 // einträge im IFD0
                 uint16_t entry_count = read16(ifd_offset);
+                // Limit entry_count to prevent DoS via huge IFD
+                constexpr uint16_t MAX_IFD_ENTRIES = 1000;
+                if (entry_count > MAX_IFD_ENTRIES) return 1;
                 
                 // orientation tag suchen (0x0112)
                 for (int i = 0; i < entry_count; i++) {
@@ -130,11 +157,12 @@ inline int read_jpeg_orientation_mem(const uint8_t* buf, size_t len) {
 inline int read_jpeg_orientation(const char* filename) {
     FILE* fp = fopen(filename, "rb");
     if (!fp) return 1;
+    FileGuard fp_guard(fp);  // RAII: auto-close on exception/return
     
     // Read first 64KB max - EXIF is always near the start
     uint8_t buf[65536];
     size_t len = fread(buf, 1, sizeof(buf), fp);
-    fclose(fp);
+    // fp_guard automatically closes on return
     
     return read_jpeg_orientation_mem(buf, len);
 }

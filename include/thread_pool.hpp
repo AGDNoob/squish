@@ -23,13 +23,13 @@ public:
     auto enqueue(F&& f, Args&&... args) -> std::future<decltype(f(args...))>;
 
     // wieviele threads laufen
-    size_t size() const { return workers_.size(); }
+    size_t size() const noexcept { return workers_.size(); }
 
     // Wait for all tasks to complete
     void wait_all();
 
     // wieviele tasks noch in der queue
-    size_t pending() const { return pending_tasks_.load(); }
+    size_t pending() const noexcept { return pending_tasks_.load(); }
 
 private:
     std::vector<std::thread> workers_;
