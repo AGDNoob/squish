@@ -93,19 +93,26 @@ Uses `fpng` by Rich Geldreich. SSE-accelerated deflate, produces valid PNG.
 
 ## Performance
 
-Test: 11,343 mixed images, 4.8 GB total, 6-core CPU
+Benchmarked with synthetic test images (640px to 5K), GCC 15, 6-core CPU:
 
-| Metric     | Value          |
-| ---------- | -------------- |
-| Throughput | 52 MB/s        |
-| Speed      | 123 images/sec |
-| Time       | 92 seconds     |
-| Threads    | 6 (auto)       |
+**Compress only (Q80)**
+
+| Workload    | Time   | Throughput | Speed      | Savings |
+| ----------- | ------ | ---------- | ---------- | ------- |
+| 6 images    | 877 ms | 77 MB/s    | 6.8 img/s  | 88.8%   |
+| 70 images   | 8.7 s  | 77.7 MB/s  | 8.1 img/s  | 88.8%   |
+
+**Compress + resize (Q80, max 1920px)**
+
+| Workload    | Time   | Throughput | Speed      | Savings |
+| ----------- | ------ | ---------- | ---------- | ------- |
+| 6 images    | 708 ms | 95.4 MB/s  | 8.5 img/s  | 94.5%   |
+| 70 images   | 7.4 s  | 91.6 MB/s  | 9.5 img/s  | 94.5%   |
 
 Comparison (estimated):
 
-- ImageMagick: 4-6 hours for same workload
-- ffmpeg: 1.5-2 hours
+- ImageMagick: 10-20x slower for same workload
+- ffmpeg: 5-10x slower
 - Most tools: single-threaded, no SIMD
 
 Bottleneck is the compression math itself. I/O is memory-mapped, threading
